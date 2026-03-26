@@ -316,6 +316,5 @@ async def main():
         bot_client.run_until_disconnected()
     )
 
-loop = asyncio.get_event_loop()
-loop.run_until_complete(main())
-loop.run_forever()
+if __name__ == "__main__":
+    asyncio.run(main())
