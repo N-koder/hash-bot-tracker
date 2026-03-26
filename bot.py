@@ -1,141 +1,258 @@
+import re
+import os
+import asyncio
+import requests
+from datetime import datetime
+from dotenv import load_dotenv
 from telethon import TelegramClient, events, Button
 from pymongo import MongoClient
-import re
-import requests
-import os
-from dotenv import load_dotenv
-from datetime import datetime
 
+
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
+
+# =========================
+# 🔐 LOAD ENV
+# =========================
 load_dotenv()
 
-# 🤖 BOT DETAILS
+# web-service free hack
+
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b'Bot is running')
+
+def run_web():
+    server = HTTPServer(('0.0.0.0', 10000), Handler)
+    server.serve_forever()
+
+threading.Thread(target=run_web).start()
+
+
+
+
+
+
+
+
+API_ID = int(os.getenv("API_ID"))
+API_HASH = os.getenv("API_HASH")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHAT_ID = int(os.getenv("CHAT_ID"))
-
-# 🔑 TELEGRAM USER CLIENT (Telethon)
-api_id = int(os.getenv("API_ID"))        # from my.telegram.org
-api_hash = os.getenv("API_HASH")
-
-client = TelegramClient('session', api_id, api_hash)
-
-# # Your database (can be file/db later)
-# hash_db = {"#afebdd21", "#881a764b"}  
-
-# 🍃 MongoDB connection
 MONGO_URI = os.getenv("MONGO_URI")
+CHANNEL = os.getenv("CHANNEL")
+CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 
-mongo_client = MongoClient(MONGO_URI)
-db = mongo_client["telegram_bot"]
+# =========================
+# 👤 USER CLIENT (READ CHANNEL)
+# =========================
+user_client = TelegramClient("user_session", API_ID, API_HASH)
+
+# =========================
+# 🤖 BOT CLIENT (PUBLIC BOT)
+# =========================
+bot_client = TelegramClient("bot_session", API_ID, API_HASH).start(bot_token=BOT_TOKEN)
+
+# =========================
+# 🍃 DATABASE
+# =========================
+mongo = MongoClient(MONGO_URI)
+db = mongo["telegram_bot"]
 collection = db["hashes"]
+users_collection = db["users"]
 
-# Channel username or ID
-channel = os.getenv("CHANNEL")
-
-# 🚀 Create client
-client = TelegramClient("session", api_id, api_hash)
-
-# -------------------------------
-# 📩 SEND MESSAGE FUNCTION
-# -------------------------------
-
-def send_telegram_alert(text):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    
-    payload = {
-        "chat_id": CHAT_ID,
-        "text": text,
-        "parse_mode": "Markdown"
-    }
-
-    requests.post(url, data=payload)
-
-# -------------------------------
-# 🧠 DB FUNCTIONS
-# -------------------------------
+# =========================
+# 🧠 DB HELPERS
+# =========================
 def hash_exists(h):
     return collection.find_one({"hash": h}) is not None
 
-def add_hash(h):
-    if not hash_exists(h):
-        collection.insert_one({"hash": h})
-        return True
-    return False
+def add_hash(h, user):
+    if hash_exists(h):
+        return False
 
-# -------------------------------
-# 🚀 /start COMMAND
-# -------------------------------
-@client.on(events.NewMessage(pattern="/start"))
+    collection.insert_one({
+        "hash": h,
+        "added_by": user.id,
+        "username": user.username if user.username else "NoUsername",
+        "first_name": user.first_name if user.first_name else "",
+        "created_at": datetime.utcnow()
+    })
+    return True
+
+def get_hashes(limit=20):
+    return [x["hash"] for x in collection.find().limit(limit)]
+
+def delete_hash(h):
+    return collection.delete_one({"hash": h}).deleted_count > 0
+
+def save_user(user):
+    user_id = user.id
+    username = user.username if user.username else "NoUsername"
+    first_name = user.first_name if user.first_name else ""
+
+    if not users_collection.find_one({"user_id": user_id}):
+        users_collection.insert_one({
+            "user_id": user_id,
+            "username": username,
+            "first_name": first_name,
+            "first_seen": datetime.utcnow()
+        })
+
+def get_all_users():
+    return [u["user_id"] for u in users_collection.find()]
+
+# =========================
+# 📢 BROADCAST ALERT
+# =========================
+def broadcast_alert(text):
+    users = get_all_users()
+
+    for user_id in users:
+        try:
+            url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+            requests.post(url, data={
+                "chat_id": user_id,
+                "text": text,
+                "parse_mode": "Markdown"
+            })
+        except:
+            continue
+
+
+def send_to_user(user_id, text):
+    try:
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+        requests.post(url, data={
+            "chat_id": user_id,
+            "text": text,
+            "parse_mode": "Markdown"
+        })
+    except:
+        pass
+
+# =========================
+# 🤖 BOT COMMANDS
+# =========================
+
+@bot_client.on(events.NewMessage(pattern="/start"))
 async def start(event):
-    if event.is_private:
-        await event.respond(
-            "👋 *Welcome to Hash Tracker Bot*\n\n"
-            "🚀 Track token hashes in real-time\n"
-            "⚡ Get instant alerts instantly\n\n"
-            "*Commands:*\n"
-            "➕ /addhash #hash\n"
-            "📜 /listhash\n"
-            "❓ /help\n\n"
-            "Stay ahead. Stay early. 📈",
-            buttons=[
-                [Button.inline("➕ Add Hash", b"add")],
-                [Button.inline("📜 View Hashes", b"list")]
-            ],
-            parse_mode="Markdown"
-        )
+    user = await event.get_sender()
+    save_user(user)
 
-# -------------------------------
-# ➕ /addhash COMMAND
-# -------------------------------
-@client.on(events.NewMessage(pattern=r"/addhash (.+)"))
+    await event.respond(
+        "🚀 *Hash Tracker Bot*\n\n"
+        "✔ Live monitoring enabled\n"
+        "✔ Multi-user alerts\n\n"
+        "/addhash #hash\n"
+        "/delete #hash\n"
+        "/listhash\n"
+        "/help",
+        buttons=[
+            [Button.inline("➕ Add Hash", b"add")],
+            [Button.inline("📜 View Hashes", b"list")]
+        ],
+        parse_mode="Markdown"
+    )
+
+@bot_client.on(events.NewMessage(pattern=r"/addhash (.+)"))
 async def addhash_cmd(event):
-    if event.is_private:
-        user_input = event.pattern_match.group(1).strip()
+    user = await event.get_sender()
+    save_user(user)
 
-        if not user_input.startswith("#"):
-            await event.reply("⚠️ Please provide hash like: /addhash #abc123")
-            return
+    h = event.pattern_match.group(1).strip()
 
-        if add_hash(user_input):
-            await event.reply(f"✅ Hash added: {user_input}", parse_mode="Markdown")
-        else:
-            await event.reply("⚠️ Hash already exists")
+    if not h.startswith("#"):
+        await event.reply("⚠️ Use: /addhash #abc123")
+        return
 
-# -------------------------------
-# 📜 /listhash COMMAND
-# -------------------------------
-@client.on(events.NewMessage(pattern=r"/listhash"))
-async def list_hash(event):
-    if event.is_private:
-        hashes = list(collection.find().limit(20))
+    if add_hash(h, user):
+        await event.reply(f"✅ Added: `{h}`", parse_mode="Markdown")
+    else:
+        await event.reply("⚠️ Already exists")
+@bot_client.on(events.NewMessage(pattern=r"/delete (.+)"))
+async def delete_cmd(event):
+    user = await event.get_sender()
+    h = event.pattern_match.group(1).strip()
 
-        if not hashes:
-            await event.reply("📭 No hashes found")
-            return
+    if not h.startswith("#"):
+        await event.reply("⚠️ Use: /delete #abc123")
+        return
 
-        text = "📜 Stored Hashes:\n\n"
-        for h in hashes:
-            text += f"{h['hash']}\n"
+    data = collection.find_one({"hash": h})
 
-        await event.reply(text , parse_mode="Markdown")
+    if not data:
+        await event.reply("❌ Hash not found")
+        return
 
-# -------------------------------
-# ❓ /help COMMAND
-# -------------------------------
-@client.on(events.NewMessage(pattern=r"/help"))
+    # optional: only owner can delete
+    if data["added_by"] != user.id:
+        await event.reply("⛔ You can only delete your own hashes")
+        return
+
+    if delete_hash(h):
+        await event.reply(f"🗑 Deleted `{h}`", parse_mode="Markdown")
+    else:
+        await event.reply("❌ Failed to delete")
+
+@bot_client.on(events.NewMessage(pattern="/listhash"))
+async def listhash(event):
+    user = await event.get_sender()
+    user_id = user.id
+
+    hashes = list(collection.find({"added_by": user_id}))
+
+    if not hashes:
+        await event.reply("📭 You have no hashes saved")
+        return
+
+    text = "📜 *Your Hashes:*\n\n"
+
+    for h in hashes:
+        text += f"🔹 `{h['hash']}`\n"
+
+    await event.reply(text, parse_mode="Markdown")
+
+@bot_client.on(events.NewMessage(pattern="/help"))
 async def help_cmd(event):
-    if event.is_private:
-        await event.reply(
-            "🛠 Commands:\n\n"
-            "/addhash #hash → Add hash\n"
-            "/listhash → Show hashes\n"
-            "/help → Help menu",
-            parse_mode="Markdown"
-        )
+    user = await event.get_sender()
+    save_user(user)
 
-# -------------------------------
-# 🎯 BUTTON HANDLER
-# -------------------------------
-@client.on(events.CallbackQuery)
+    await event.reply(
+        "🛠 *Help Menu*\n\n"
+        "➕ /addhash #hash\n"
+        "➖ /delete #hash\n"
+        "📜 /listhash\n"
+        "❓ /help",
+        parse_mode="Markdown"
+    )
+
+@bot_client.on(events.NewMessage(pattern="/users"))
+async def users_cmd(event):
+
+    total = users_collection.count_documents({})
+    last_users = users_collection.find().sort("_id", -1).limit(10)
+
+    text = (
+        f"👥 *Bot Users*\n\n"
+        f"📊 Total Users: {total}\n\n"
+        f"🧾 Last Users:\n"
+    )
+
+    for u in last_users:
+        username = u.get("username", "NoUsername")
+        first_name = u.get("first_name", "")
+
+        if username != "NoUsername":
+            text += f"- @{username}\n"
+        else:
+            text += f"- {first_name} (no username)\n"
+
+    await event.reply(text, parse_mode="Markdown")
+
+@bot_client.on(events.CallbackQuery)
 async def buttons(event):
     data = event.data.decode()
 
@@ -143,101 +260,58 @@ async def buttons(event):
         await event.respond("➕ Send: /addhash #yourhash")
 
     elif data == "list":
-        hashes = list(collection.find().limit(10))
-        text = "📜 Hashes:\n\n"
-        for h in hashes:
-            text += f"{h['hash']}\n"
-        await event.respond(text)
+        await event.respond("📜 Hashes:\n\n" + "\n".join(get_hashes(10)))
 
-
-# -------------------------------
-# 📡 CHANNEL LISTENER
-# -------------------------------
-
-@client.on(events.NewMessage(chats=channel))
-async def handler(event):
+# =========================
+# 📡 CHANNEL LISTENER (USER CLIENT)
+# =========================
+@user_client.on(events.NewMessage(chats=CHANNEL_ID))
+async def listener(event):
     try:
         message = event.message.message
+        print("📩 CHANNEL:", message)
 
-        print("\n📩 New Message:")
-        print(message)
+        found = re.findall(r"#\w+", message)
 
-        found_hashes = re.findall(r"#\w+", message)
+        if not found:
+            return
 
-        for h in found_hashes:
-            if hash_exists(h):
-                time = datetime.now().strftime("%H:%M:%S")
-                print("🚨 MATCH FOUND:", h)
+        for h in found:
+            data = collection.find_one({"hash": h})
+
+            if data:
+                user_id = data["added_by"]
 
                 alert = (
-                    f"🚨 *ALPHA DETECTED*\n\n"
+                    "🚨 *ALPHA DETECTED*\n\n"
                     f"🔑 Hash: `{h}`\n"
-                    f"📡 Channel: {channel}\n"
-                    f"⏰ Time: {time}\n\n"
+                    f"📡 Channel: {CHANNEL}\n"
+                    f"⏰ Time: {datetime.now().strftime('%H:%M:%S')}\n\n"
                     f"{message}"
                 )
-                print("🚨 MATCH FOUND:", h)
-                send_telegram_alert(alert)
 
+                print(f"🚨 Sending to {user_id}")
+
+                send_to_user(user_id, alert)
 
     except Exception as e:
         print("❌ Error:", e)
 
+# =========================
+# 🚀 RUN BOTH CLIENTS
+# =========================
+async def main():
+    await user_client.start()   # will ask OTP first time
+    await bot_client.start()
 
-# ▶ Start bot
-print("🚀 Bot is running...")
-send_telegram_alert("🚀 Bot is running...")
-client.start()
-client.run_until_disconnected()
+    print("🚀 Bot is running...")
+    broadcast_alert("🚀 Bot is running...")
 
+    await asyncio.gather(
+        user_client.run_until_disconnected(),
+        bot_client.run_until_disconnected()
+    )
 
-
-# @client.on(events.NewMessage)
-# async def handler(event):
-#     try:
-#         # Only process messages from target channel
-#         if event.chat.username != channel:
-#             return
-
-#         message = event.message.message
-#         print("\n📩 New Message:")
-#         print(message)
-
-#         # 🔍 Extract hashes
-#         found_hashes = re.findall(r"#\w+", message)
-
-#         for h in found_hashes:
-#             if hash_exists(h):
-#                 print("🚨 MATCH FOUND:", h)
-
-#                 await client.send_message(
-#                     "me",
-#                     f"🚨 MATCH FOUND: {h}\n\n{message}"
-#                 )
-
-#     except Exception as e:
-#         print("❌ Error:", e)
-
-# @client.on(events.NewMessage(chats=channel))
-# async def handler(event):
-#     try:
-#         await client.send_message( "me", "Bot running...")
-#         message = event.message.message
-
-
-#         print("\n📩 New Message:")
-#         print(message)
-
-#         found_hashes = re.findall(r"#\w+", message)
-
-#         for h in found_hashes:
-#             if hash_exists(h):
-#                 print("🚨 MATCH FOUND:", h)
-
-#                 await client.send_message(
-#                     "me",
-#                     f"🚨 MATCH FOUND: {h}\n\n{message}"
-#                 )
-
-#     except Exception as e:
-#         print("❌ Error:", e)
+loop = asyncio.get_event_loop()
+loop.run_until_complete(main())
+loop.run_forever()
