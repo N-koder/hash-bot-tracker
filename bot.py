@@ -25,6 +25,10 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b'Bot is running')
 
+    def do_HEAD(self):
+        self.send_response(200)
+        self.end_headers()
+
 def run_web():
     server = HTTPServer(('0.0.0.0', 10000), Handler)
     server.serve_forever()
@@ -53,7 +57,7 @@ user_client = TelegramClient("user_session", API_ID, API_HASH)
 # =========================
 # 🤖 BOT CLIENT (PUBLIC BOT)
 # =========================
-bot_client = TelegramClient("bot_session", API_ID, API_HASH).start(bot_token=BOT_TOKEN)
+bot_client = TelegramClient("bot_session", API_ID, API_HASH)
 
 # =========================
 # 🍃 DATABASE
@@ -302,7 +306,7 @@ async def listener(event):
 # =========================
 async def main():
     await user_client.start()   # will ask OTP first time
-    await bot_client.start()
+    await bot_client.start(bot_token=BOT_TOKEN)
 
     print("🚀 Bot is running...")
     broadcast_alert("🚀 Bot is running...")
