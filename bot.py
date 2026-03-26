@@ -305,8 +305,11 @@ async def listener(event):
 # 🚀 RUN BOTH CLIENTS
 # =========================
 async def main():
-    await user_client.start()   # will ask OTP first time
+    print("STEP 1 reached")
+    await user_client.start()  # will ask OTP first time
+    print("STEP 2 user started")
     await bot_client.start(bot_token=BOT_TOKEN)
+    print("STEP 3 bot started")
 
     print("🚀 Bot is running...")
     broadcast_alert("🚀 Bot is running...")
