@@ -205,6 +205,7 @@ def unblock_user(user_id):
 # =========================
 
 async def check_block(event):
+    print(f"Checking if user {event.sender_id} is blocked...", flush=True)
     if is_blocked(event.sender_id):
         await event.reply("SORRY! we are out of service :(")
         return True
@@ -216,11 +217,15 @@ async def check_block(event):
 
 @bot_client.on(events.NewMessage(pattern="/start"))
 async def start(event):
+    print("Received /start command!", flush=True)
     if await check_block(event):
         return
     
+    print("User is not blocked, saving user to DB...", flush=True)
     user = await event.get_sender()
     save_user(user)
+    
+    print("Responding to /start command...", flush=True)
 
     await event.respond(
         "🚀 *Hash Tracker Bot*\n\n"
