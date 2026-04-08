@@ -5,6 +5,7 @@ import requests
 from datetime import datetime, UTC
 from dotenv import load_dotenv
 from telethon import TelegramClient, events, Button
+from telethon.sessions import StringSession
 from pymongo import MongoClient
 
 
@@ -53,7 +54,11 @@ CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 # =========================
 # 👤 USER CLIENT (READ CHANNEL)
 # =========================
-user_client = TelegramClient("user_session", API_ID, API_HASH)
+SESSION_STRING = os.getenv("SESSION_STRING")
+if SESSION_STRING:
+    user_client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
+else:
+    user_client = TelegramClient("user_session", API_ID, API_HASH)
 
 # =========================
 # 🤖 BOT CLIENT (PUBLIC BOT)
@@ -477,11 +482,11 @@ async def listener(event):
 # 🚀 RUN BOTH CLIENTS
 # =========================
 async def main():
-    print("STEP 1 reached")
-    await user_client.start()  # will ask OTP first time
-    print("STEP 2 user started")
+    print("STEP 1 reached", flush=True)
+    await user_client.start()  # Make sure session string is set for Render, or this will block waiting for OTP
+    print("STEP 2 user started", flush=True)
     await bot_client.start(bot_token=BOT_TOKEN)
-    print("🚀 Bot is running...")
+    print("🚀 Bot is running...", flush=True)
     # broadcast_alert("🚀 Bot is running...")
 
     await asyncio.gather(
