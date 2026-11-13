@@ -482,7 +482,10 @@ async def keep_alive_worker():
 # =========================
 is_headless = os.getenv("RENDER") or not sys.stdin.isatty()
 
-if SESSION_STRING:
+if os.path.exists("user_session.session"):
+    logger.info("Found local user_session.session, using file session...")
+    user_client = TelegramClient("user_session", API_ID, API_HASH)
+elif SESSION_STRING:
     logger.info("Initializing User Client with StringSession...")
     user_client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 else:
@@ -1054,7 +1057,17 @@ async def channel_listener(event):
 async def main():
     logger.info("Starting Telegram clients...")
 
-    # Start User Client
+    # 1. Start Bot Client FIRST so it responds to Telegram commands instantly
+    try:
+        logger.info("Connecting Bot Client...")
+        await bot_client.start(bot_token=BOT_TOKEN)
+        bot_me = await bot_client.get_me()
+        logger.info(f"✅ Bot Client is LIVE as: @{bot_me.username} (ID: {bot_me.id})")
+    except Exception as e:
+        logger.critical(f"Failed to start Bot Client: {e}")
+        sys.exit(1)
+
+    # 2. Start User Client for real-time channel monitoring
     try:
         logger.info("Connecting User Client...")
         await user_client.connect()
@@ -1064,18 +1077,7 @@ async def main():
         user_me = await user_client.get_me()
         logger.info(f"✅ User Client connected as: {user_me.first_name} (ID: {user_me.id})")
     except Exception as e:
-        logger.critical(f"Failed to start User Client: {e}")
-        sys.exit(1)
-
-    # Start Bot Client
-    try:
-        logger.info("Connecting Bot Client...")
-        await bot_client.start(bot_token=BOT_TOKEN)
-        bot_me = await bot_client.get_me()
-        logger.info(f"✅ Bot Client connected as: @{bot_me.username} (ID: {bot_me.id})")
-    except Exception as e:
-        logger.critical(f"Failed to start Bot Client: {e}")
-        sys.exit(1)
+        logger.error(f"Failed to connect User Client: {e}")
 
     logger.info("🚀 Hash Tracker is LIVE and actively monitoring channels!")
 
