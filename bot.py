@@ -99,6 +99,34 @@ except Exception as e:
 
 # Create DB Indexes for maximum read/write performance
 try:
+    # 1. Backfill hash_lower on legacy documents where it's missing or null
+    collection.update_many(
+        {"$or": [{"hash_lower": {"$exists": False}}, {"hash_lower": None}]},
+        [{"$set": {"hash_lower": {"$toLower": "$hash"}}}]
+    )
+
+    # 2. Clean up any duplicate legacy entries before creating unique index
+    pipeline = [
+        {"$group": {
+            "_id": {"hash_lower": "$hash_lower", "added_by": "$added_by"},
+            "uniqueIds": {"$addToSet": "$_id"},
+            "total": {"$sum": 1}
+        }},
+        {"$filter": {"input": "$$ROOT", "cond": {"$gt": ["$$this.total", 1]}}}
+    ]
+    # Remove duplicates if any
+    seen_pairs = set()
+    for doc in collection.find():
+        h_low = doc.get("hash_lower")
+        user_id = doc.get("added_by")
+        if not h_low or not user_id:
+            continue
+        pair = (h_low, user_id)
+        if pair in seen_pairs:
+            collection.delete_one({"_id": doc["_id"]})
+        else:
+            seen_pairs.add(pair)
+
     collection.create_index([("hash_lower", ASCENDING), ("added_by", ASCENDING)], unique=True)
     collection.create_index([("hash_lower", ASCENDING)])
     users_collection.create_index([("user_id", ASCENDING)], unique=True)
@@ -1028,7 +1056,11 @@ async def main():
 
     # Start User Client
     try:
-        await user_client.start()
+        logger.info("Connecting User Client...")
+        await user_client.connect()
+        if not await user_client.is_user_authorized():
+            logger.info("User session requires authorization. Initializing start()...")
+            await user_client.start()
         user_me = await user_client.get_me()
         logger.info(f"✅ User Client connected as: {user_me.first_name} (ID: {user_me.id})")
     except Exception as e:
@@ -1037,6 +1069,7 @@ async def main():
 
     # Start Bot Client
     try:
+        logger.info("Connecting Bot Client...")
         await bot_client.start(bot_token=BOT_TOKEN)
         bot_me = await bot_client.get_me()
         logger.info(f"✅ Bot Client connected as: @{bot_me.username} (ID: {bot_me.id})")
