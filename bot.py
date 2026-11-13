@@ -471,8 +471,8 @@ else:
         logger.info("No SESSION_STRING provided. Falling back to local file session 'user_session'...")
         user_client = TelegramClient("user_session", API_ID, API_HASH)
 
-# Bot Client: uses MemorySession or bot_session so it doesn't fail on ephemeral disk
-bot_client = TelegramClient(MemorySession(), API_ID, API_HASH)
+# Bot Client: uses SQLite session 'bot_session' for reliable incoming event handling
+bot_client = TelegramClient("bot_session", API_ID, API_HASH)
 
 # =========================
 # ⚡ ASYNC FAST DISPATCHER
@@ -503,12 +503,13 @@ async def async_send_to_user(user_id: int, text: str):
 # 🤖 BOT COMMANDS & UI
 # =========================
 async def check_user_blocked(event) -> bool:
+    logger.info(f"Message from {event.sender_id} ({getattr(event.sender, 'username', 'no_user')}): {event.raw_text}")
     if is_blocked(event.sender_id):
         await event.reply("⛔ Your access to this bot is currently restricted.")
         return True
     return False
 
-@bot_client.on(events.NewMessage(pattern=r"^/start$"))
+@bot_client.on(events.NewMessage(pattern=r"(?i)^/start(?:@\w+)?(?:\s.*)?$"))
 async def start_cmd(event):
     if await check_user_blocked(event):
         return
@@ -539,7 +540,7 @@ async def start_cmd(event):
     ]
     await event.respond(text, buttons=buttons, parse_mode="md")
 
-@bot_client.on(events.NewMessage(pattern=r"^/addhash(?:\s+([\s\S]+))?$"))
+@bot_client.on(events.NewMessage(pattern=r"(?i)^/addhash(?:@\w+)?(?:\s+([\s\S]+))?$"))
 async def addhash_cmd(event):
     if await check_user_blocked(event):
         return
@@ -587,7 +588,7 @@ async def addhash_cmd(event):
     else:
         await event.reply(f"⚠️ You are already tracking `{tag}`.", parse_mode="md")
 
-@bot_client.on(events.NewMessage(pattern=r"^/(?:addbulk|bulk)(?:\s+([\s\S]+))?$"))
+@bot_client.on(events.NewMessage(pattern=r"(?i)^/(?:addbulk|bulk)(?:@\w+)?(?:\s+([\s\S]+))?$"))
 async def addbulk_cmd(event):
     if await check_user_blocked(event):
         return
@@ -648,7 +649,7 @@ async def handle_forwarded_hashes(event):
     added, skipped = add_hashes_bulk(parsed, user)
     await reply_bulk_result(event, added, skipped, title="Forwarded Hashes Extracted & Saved")
 
-@bot_client.on(events.NewMessage(pattern=r"^/delete(?: (.+))?$"))
+@bot_client.on(events.NewMessage(pattern=r"(?i)^/delete(?:@\w+)?(?:\s+(.+))?$"))
 async def delete_cmd(event):
     if await check_user_blocked(event):
         return
@@ -668,7 +669,7 @@ async def delete_cmd(event):
     else:
         await event.reply(f"❌ Hash `{tag}` was not found in your tracking list.", parse_mode="md")
 
-@bot_client.on(events.NewMessage(pattern=r"^/listhash$"))
+@bot_client.on(events.NewMessage(pattern=r"(?i)^/listhash(?:@\w+)?$"))
 async def listhash_cmd(event):
     if await check_user_blocked(event):
         return
@@ -692,7 +693,7 @@ async def listhash_cmd(event):
     text += "\nTo delete: `/delete #tag` | Clear all: `/clear`"
     await event.reply(text, parse_mode="md")
 
-@bot_client.on(events.NewMessage(pattern=r"^/clear$"))
+@bot_client.on(events.NewMessage(pattern=r"(?i)^/clear(?:@\w+)?$"))
 async def clear_cmd(event):
     if await check_user_blocked(event):
         return
@@ -711,7 +712,7 @@ async def clear_cmd(event):
     ]
     await event.reply(f"⚠️ Are you sure you want to remove all **{count}** of your tracked hashes?", buttons=buttons, parse_mode="md")
 
-@bot_client.on(events.NewMessage(pattern=r"^/stats$"))
+@bot_client.on(events.NewMessage(pattern=r"(?i)^/stats(?:@\w+)?$"))
 async def stats_cmd(event):
     if await check_user_blocked(event):
         return
@@ -736,14 +737,14 @@ async def stats_cmd(event):
     )
     await event.reply(text, parse_mode="md")
 
-@bot_client.on(events.NewMessage(pattern=r"^/ping$"))
+@bot_client.on(events.NewMessage(pattern=r"(?i)^/ping(?:@\w+)?$"))
 async def ping_cmd(event):
     t0 = time.time()
     msg = await event.reply("🏓 Pong...")
     latency = round((time.time() - t0) * 1000, 2)
     await msg.edit(f"🏓 **Pong!** `Latency: {latency} ms` ⚡")
 
-@bot_client.on(events.NewMessage(pattern=r"^/help$"))
+@bot_client.on(events.NewMessage(pattern=r"(?i)^/help(?:@\w+)?(?:\s.*)?$"))
 async def help_cmd(event):
     if await check_user_blocked(event):
         return
@@ -836,7 +837,7 @@ async def get_target_user(event, arg: str):
                 return None
     return None
 
-@bot_client.on(events.NewMessage(pattern=r"^/admin$"))
+@bot_client.on(events.NewMessage(pattern=r"(?i)^/admin(?:@\w+)?$"))
 async def admin_panel(event):
     if event.sender_id not in ADMIN_IDS:
         return
@@ -851,7 +852,7 @@ async def admin_panel(event):
     )
     await event.reply(text, parse_mode="md")
 
-@bot_client.on(events.NewMessage(pattern=r"^/users$"))
+@bot_client.on(events.NewMessage(pattern=r"(?i)^/users(?:@\w+)?$"))
 async def admin_users(event):
     if event.sender_id not in ADMIN_IDS:
         return
@@ -867,7 +868,7 @@ async def admin_users(event):
 
     await event.reply(text, parse_mode="md")
 
-@bot_client.on(events.NewMessage(pattern=r"^/broadcast(?: (.+))?$"))
+@bot_client.on(events.NewMessage(pattern=r"(?i)^/broadcast(?:@\w+)?(?:\s+([\s\S]+))?$"))
 async def admin_broadcast(event):
     if event.sender_id not in ADMIN_IDS:
         return
@@ -895,7 +896,7 @@ async def admin_broadcast(event):
 
     await status_msg.edit(f"✅ **Broadcast complete!**\n• Delivered: `{sent}`\n• Failed: `{failed}`")
 
-@bot_client.on(events.NewMessage(pattern=r"^/block(?: (.+))?$"))
+@bot_client.on(events.NewMessage(pattern=r"(?i)^/block(?:@\w+)?(?:\s+(.+))?$"))
 async def admin_block(event):
     if event.sender_id not in ADMIN_IDS:
         return
@@ -909,7 +910,7 @@ async def admin_block(event):
     block_user(target.id, getattr(target, "username", ""), getattr(target, "first_name", ""))
     await event.reply(f"🚫 User `{target.id}` (@{getattr(target, 'username', 'none')}) has been blocked.")
 
-@bot_client.on(events.NewMessage(pattern=r"^/unblock(?: (.+))?$"))
+@bot_client.on(events.NewMessage(pattern=r"(?i)^/unblock(?:@\w+)?(?:\s+(.+))?$"))
 async def admin_unblock(event):
     if event.sender_id not in ADMIN_IDS:
         return
@@ -928,7 +929,7 @@ async def admin_unblock(event):
     unblock_user(target.id)
     await event.reply(f"✅ User `{target.id}` unblocked.")
 
-@bot_client.on(events.NewMessage(pattern=r"^/blocked$"))
+@bot_client.on(events.NewMessage(pattern=r"(?i)^/blocked(?:@\w+)?$"))
 async def admin_blocked_list(event):
     if event.sender_id not in ADMIN_IDS:
         return
@@ -945,7 +946,7 @@ async def admin_blocked_list(event):
 
     await event.reply(text, parse_mode="md")
 
-@bot_client.on(events.NewMessage(pattern=r"^/allhashes$"))
+@bot_client.on(events.NewMessage(pattern=r"(?i)^/allhashes(?:@\w+)?$"))
 async def admin_all_hashes(event):
     if event.sender_id not in ADMIN_IDS:
         return
