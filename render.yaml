@@ -1,0 +1,32 @@
+services:
+  - type: web
+    name: telegram-hash-tracker
+    runtime: python
+    region: oregon
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot.py
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: PORT
+        value: 10000
+      - key: API_ID
+        sync: false
+      - key: API_HASH
+        sync: false
+      - key: BOT_TOKEN
+        sync: false
+      - key: MONGO_URI
+        sync: false
+      - key: SESSION_STRING
+        sync: false
+      - key: CHANNEL_ID
+        sync: false
+      - key: CHANNEL
+        value: "Alpha Channel"
+      - key: ADMIN_IDS
+        sync: false
+      - key: KEEP_ALIVE_URL
+        sync: false
