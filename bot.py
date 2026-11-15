@@ -2,6 +2,7 @@ import re
 import os
 import sys
 import time
+import html
 import asyncio
 import logging
 import threading
@@ -508,13 +509,13 @@ bot_client = TelegramClient("bot_session", API_ID, API_HASH)
 # =========================
 # ⚡ ASYNC FAST DISPATCHER
 # =========================
-async def async_send_to_user(user_id: int, text: str):
+async def async_send_to_user(user_id: int, text: str, buttons=None, parse_mode="html"):
     """Asynchronously dispatches Telegram alerts using Telethon's native connection."""
     if is_blocked(user_id):
         return
 
     try:
-        await bot_client.send_message(user_id, text, parse_mode="md")
+        await bot_client.send_message(user_id, text, buttons=buttons, parse_mode=parse_mode)
     except UserIsBlockedError:
         logger.warning(f"User {user_id} has blocked the bot. Auto-blocking locally.")
         block_user(user_id)
@@ -522,13 +523,143 @@ async def async_send_to_user(user_id: int, text: str):
         logger.warning(f"Flood wait on sending to {user_id}: sleeping {e.seconds}s")
         await asyncio.sleep(e.seconds)
         try:
-            await bot_client.send_message(user_id, text, parse_mode="md")
+            await bot_client.send_message(user_id, text, buttons=buttons, parse_mode=parse_mode)
         except Exception:
             pass
     except (PeerIdInvalidError, ChatWriteForbiddenError) as e:
         logger.warning(f"Cannot send to user {user_id}: {e}")
     except Exception as e:
         logger.error(f"Unexpected error sending alert to {user_id}: {e}")
+
+def build_classy_alert(raw_text: str, tag: str, nickname: str, chat_title: str, now_str: str, msg_link: str = None):
+    """
+    Parses channel message into an ultra-classy, clean alpha alert card with 0ms network overhead.
+    Builds direct trading buttons: Maestro + GMGN / DEX / Explorer + Post Link.
+    """
+    # 1. Contract address detection (EVM 0x or Solana base58)
+    evm_match = re.search(r'\b(0x[a-fA-F0-9]{40})\b', raw_text)
+    sol_ca_match = re.search(r'(?:Contract|CA|Token|Address):\s*([1-9A-HJ-NP-Za-km-z]{32,44})', raw_text, re.IGNORECASE)
+    sol_pump_match = re.search(r'\b([1-9A-HJ-NP-Za-km-z]{32,44}pump)\b', raw_text)
+
+    contract = None
+    if evm_match:
+        contract = evm_match.group(1)
+    elif sol_ca_match:
+        contract = sol_ca_match.group(1)
+    elif sol_pump_match:
+        contract = sol_pump_match.group(1)
+
+    # 2. Chain detection
+    raw_lower = raw_text.lower()
+    if 'base' in raw_lower or 'basescan' in raw_lower:
+        chain = 'base'
+        chain_name = 'Base'
+        explorer_name = 'Basescan'
+        explorer_url = f'https://basescan.org/token/{contract}' if contract else None
+    elif 'bsc' in raw_lower or 'bep20' in raw_lower or 'bnb' in raw_lower:
+        chain = 'bsc'
+        chain_name = 'BNB Chain'
+        explorer_name = 'BscScan'
+        explorer_url = f'https://bscscan.com/token/{contract}' if contract else None
+    elif 'sol' in raw_lower or 'solana' in raw_lower or sol_ca_match or sol_pump_match:
+        chain = 'sol'
+        chain_name = 'Solana'
+        explorer_name = 'Solscan'
+        explorer_url = f'https://solscan.io/token/{contract}' if contract else None
+    else:
+        chain = 'eth'
+        chain_name = 'Ethereum (ERC-20)'
+        explorer_name = 'Etherscan'
+        explorer_url = f'https://etherscan.io/token/{contract}' if contract else None
+
+    # 3. Check for any explicit DEX / Chart URL inside message
+    dex_match = re.search(r'https?://(?:www\.)?(?:dexscreener\.com|geckoterminal\.com|dextools\.io)/[^\s]+', raw_text)
+    dex_url = dex_match.group(0) if dex_match else None
+
+    # 4. Extract token metadata
+    name_m = re.search(r'(?:Etherscan|Basescan|Solscan|Token|Name):\s*([^\n\r#]+)', raw_text, re.IGNORECASE)
+    sym_m = re.search(r'Symbol:\s*([A-Za-z0-9_$]+)', raw_text, re.IGNORECASE)
+    supply_m = re.search(r'Total supply:\s*([0-9,._]+)', raw_text, re.IGNORECASE)
+    bal_m = re.search(r'Deployer balance:\s*([^\n\r]+)', raw_text, re.IGNORECASE)
+
+    token_name = name_m.group(1).strip() if name_m else None
+    symbol = sym_m.group(1).strip() if sym_m else None
+    supply = supply_m.group(1).strip() if supply_m else None
+    balance = bal_m.group(1).strip() if bal_m else None
+
+    if supply and supply.isdigit():
+        try:
+            supply = f"{int(supply):,}"
+        except Exception:
+            pass
+
+    # Clean text fallback (filters out promotional bot signatures)
+    clean_lines = []
+    for line in raw_text.splitlines():
+        line_s = line.strip()
+        if not line_s:
+            continue
+        if re.search(r'(Powered by|TG buy bots|Banana|Maestro|shitco1n|Gyoza)', line_s, re.IGNORECASE):
+            continue
+        clean_lines.append(html.escape(line_s))
+    cleaned_body = "\n".join(clean_lines)
+
+    # 5. Build Classy Layout
+    title_suffix = f" — <b>${html.escape(symbol)}</b>" if symbol else ""
+    nick_disp = f" (<i>{html.escape(nickname)}</i>)" if nickname else ""
+
+    alert_lines = [
+        f"⚡ <b>ALPHA DETECTED</b>{title_suffix}",
+        "",
+        f"🔑 <b>Tracked:</b> <code>{html.escape(tag)}</code>{nick_disp}",
+        f"📡 <b>Channel:</b> {html.escape(chat_title)}  •  ⏰ <code>{now_str}</code>",
+        "━━━━━━━━━━━━━━━━━━━━"
+    ]
+
+    if token_name or symbol or contract:
+        if token_name and symbol:
+            alert_lines.append(f"💎 <b>Token:</b> {html.escape(token_name)} (<b>${html.escape(symbol)}</b>)")
+        elif token_name:
+            alert_lines.append(f"💎 <b>Token:</b> {html.escape(token_name)}")
+        elif symbol:
+            alert_lines.append(f"💎 <b>Symbol:</b> <b>${html.escape(symbol)}</b>")
+
+        alert_lines.append(f"⛓️ <b>Chain:</b> {chain_name}")
+        if balance:
+            alert_lines.append(f"💰 <b>Deployer Balance:</b> <code>{html.escape(balance)}</code>")
+        if supply:
+            alert_lines.append(f"📦 <b>Total Supply:</b> <code>{supply}</code>")
+
+        if contract:
+            alert_lines.append("")
+            alert_lines.append("📋 <b>Contract (tap to copy):</b>")
+            alert_lines.append(f"<code>{contract}</code>")
+    else:
+        alert_lines.append(cleaned_body)
+
+    alert_lines.append("━━━━━━━━━━━━━━━━━━━━")
+    alert_text = "\n".join(alert_lines)
+
+    # 6. Build Direct Action Buttons
+    row1 = []
+    row2 = []
+
+    if contract:
+        # Maestro direct 1-tap trade button
+        row1.append(Button.url("🚀 Buy on Maestro", f"https://t.me/MaestroSniperBot?start={contract}"))
+        # GMGN (reliable direct chart, security check, and trade for unindexed/new tokens)
+        row1.append(Button.url("📊 GMGN", f"https://gmgn.ai/{chain}/token/{contract}"))
+
+    if dex_url:
+        row2.append(Button.url("📈 DEX", dex_url))
+    elif explorer_url:
+        row2.append(Button.url(f"🔍 {explorer_name}", explorer_url))
+
+    if msg_link:
+        row2.append(Button.url("📡 Original Post", msg_link))
+
+    buttons = [r for r in [row1, row2] if r]
+    return alert_text, (buttons if buttons else None)
 
 # =========================
 # 🤖 BOT COMMANDS & UI
@@ -1029,20 +1160,19 @@ async def channel_listener(event):
                     continue
 
                 notified_users.add(user_id)
-                nickname = sub.get("nickname")
-                hash_display = f"`{tag}` (*{nickname}*)" if nickname else f"`{tag}`"
+                nickname = sub.get("nickname", "")
 
-                alert = (
-                    "🚨 **ALPHA DETECTED**\n\n"
-                    f"🔑 **Hashtag:** {hash_display}\n"
-                    f"📡 **Source:** {chat_title}\n"
-                    f"⏰ **Time:** `{now_str}`\n\n"
-                    f"💬 **Message Content:**\n{raw_text}\n"
-                    f"{link_str}"
+                alert_text, alert_buttons = build_classy_alert(
+                    raw_text=raw_text,
+                    tag=tag,
+                    nickname=nickname,
+                    chat_title=chat_title,
+                    now_str=now_str,
+                    msg_link=msg_link
                 )
 
                 # Fire concurrent non-blocking async send tasks
-                tasks.append(async_send_to_user(user_id, alert))
+                tasks.append(async_send_to_user(user_id, alert_text, buttons=alert_buttons, parse_mode="html"))
 
         if tasks:
             logger.info(f"⚡ Matched tags {found_tags}. Dispatching {len(tasks)} notifications...")
